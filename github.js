@@ -17,6 +17,7 @@ login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD, function
 
   //raml in:path extension:raml
   //wadl in:path extension:wadl
+  //apib in:path extension:apib
   //
   var queries = [
     'filename:swagger extension:yml -language:yaml',
