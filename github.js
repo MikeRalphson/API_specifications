@@ -141,7 +141,7 @@ function login(login, password, callback) {
     formData.login = login;
     formData.password = password;
 
-    request.post(url, {form: formData, jar: true}, function (error, response, body) {
+    request.post(url, {form: formData}, function (error, response, body) {
       callback(error);
     });
   });
