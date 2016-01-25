@@ -208,7 +208,8 @@ function codeSearchImpl (options, callback) {
     list.entries = Array.from($('.code-list-item').map(function () {
       return {
         repository: $('.title a:first-child', this).attr('href'),
-        path: $('.title a:nth-child(2)', this).attr('title')
+        path: $('.title a:nth-child(2)', this).attr('title'),
+        indexedFile: $('.full-path a', this).attr('href')
       };
     }));
 
