@@ -63,7 +63,12 @@ function codeSearchAll(options, callback) {
     function codeSearchInterval() {
       var sizeOptions = _.cloneDeep(options);
       var end = begin + step;
-      sizeOptions.query += ' size:"' + begin + '..' + end + '"';
+      var _100MB = 100*1024*1024; //GitHub limit on filesize
+      if (end < _100MB)
+        sizeOptions.query += ' size:"' + begin + '..' + end + '"';
+      else
+        sizeOptions.query += ' size:>=' + begin
+
       codeSearch(sizeOptions, function (err, data) {
         if (err)
           return callback(err);
@@ -83,10 +88,9 @@ function codeSearchAll(options, callback) {
 
             allEntries = allEntries.concat(entries);
             var leftEntries = firstData.totalEntries - _.size(allEntries);
-            assert(leftEntries >= 0);
-            console.log('Left ' + leftEntries);
-            if (leftEntries === 0)
+            if (leftEntries <= 0 || begin > _100MB)
               return callback(null, allEntries);
+            console.log('Left ' + leftEntries);
 
             codeSearchInterval();
           });
