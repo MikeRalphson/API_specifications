@@ -23,8 +23,8 @@ login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD, function
     'filename:swagger extension:yml -language:yaml',
     'filename:swagger extension:yaml -language:yaml',
     'filename:swagger extension:json -language:json',
-    'swaggerVersion AND apis in:file language:YAML',
-    'swaggerVersion AND apis in:file language:JSON',
+    'swaggerVersion AND info in:file language:YAML',
+    'swaggerVersion AND info in:file language:JSON',
     'swagger AND paths in:file language:YAML',
     'swagger AND paths in:file language:JSON'
   ];
