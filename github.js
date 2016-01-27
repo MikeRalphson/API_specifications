@@ -211,11 +211,17 @@ function codeSearchImpl (options, callback) {
 
     list.entries = Array.from($('.code-list-item').map(function () {
       var fileLink = $('.title a:nth-child(2)', this);
-      return {
+      var result = {
         repository: $('.title a:first-child', this).attr('href'),
         path: fileLink.attr('title'),
-        indexedFile: fileLink.attr('href')
+        lastIndexed: $('time', this).attr('datetime')
       };
+
+      var indexedFile = fileLink.attr('href');
+      var begin = (result.repository + '/blob/').length;
+      var end = indexedFile.indexOf('/', begin);
+      result.indexedCommit = indexedFile.slice(begin, end);
+      return result;
     }));
 
     if ($('.blankslate').length > 0) {
