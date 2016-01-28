@@ -29,7 +29,16 @@ login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD, function
     'swagger AND paths in:file language:JSON'
   ];
 
-  var entries = async.reduce(queries, [],
+  runQueries(queries, function (error, allEntries) {
+    assert(!error, error);
+    console.log(_.size(allEntries));
+    var str = JSON.stringify(allEntries, null, 2);
+    fs.writeFileSync('scrape_result_path2.json', str);
+  });
+});
+
+function runQueries(queries, callback) {
+  async.reduce(queries, [],
     function (memo, query, asynCallback) {
       codeSearchAll({query: query}, function (err, entries) {
         if (err)
@@ -38,12 +47,9 @@ login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD, function
       });
   },
   function (error, allEntries) {
-    assert(!error, error);
-    console.log(_.size(allEntries));
-    var str = JSON.stringify(allEntries, null, 2);
-    fs.writeFileSync('scrape_result.json', str);
+    callback(error, allEntries);
   });
-});
+}
 
 function codeSearchAll(options, callback) {
   codeSearch(options, function (err, firstData) {
