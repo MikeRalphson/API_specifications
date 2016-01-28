@@ -5,9 +5,10 @@ var assert = require('assert');
 var URL = require('url');
 
 var _ = require('lodash');
-//require('request').debug = true;
+var YAML = require('js-yaml');
 var async = require('async');
 var request = require('request').defaults({jar: true});
+//require('request').debug = true;
 var cheerio = require('cheerio');
 
 var baseUrl = 'https://github.com';
@@ -30,15 +31,47 @@ login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD, function
     'swagger AND paths in:file language:JSON'
   ];
 
-  runQueries(queries, function (error, allEntries) {
-    assert(!error, error);
-    console.log(_.size(allEntries));
-    var str = JSON.stringify(allEntries, null, 2);
-    fs.writeFileSync('scrape_result_path2.json', str);
-  });
+  var formats = {
+    swagger_1: {},
+    swagger_2: {},
+  };
+
+  runQueries(queries,
+    function (body, specs, hash) {
+      var spec;
+      try {
+        spec = JSON.parse(body)
+      }
+      catch (e) {
+        try {
+          spec = YAML.safeLoad(body);
+        }
+        catch (e) {
+          console.log(e);
+          return;
+        }
+      }
+
+      if (!spec)
+        return;
+
+      if (!_.isUndefined(spec.swagger))
+        formats.swagger_2[hash] = specs;
+      else if (!_.isUndefined(spec.swaggerVersion) && !_.isUndefined(spec.info)) {
+        formats.swagger_1[hash] = specs;
+        console.log('test');
+      }
+    },
+    function (error, allEntries) {
+      assert(!error, error);
+      console.log(_.mapValues(formats, _.size));
+      var str = JSON.stringify(formats, null, 2);
+      fs.writeFileSync('sort_result.json', str);
+    }
+  );
 });
 
-function runQueries(queries, callback) {
+function runQueries(queries, iter, callback) {
   async.reduce(queries, [],
     function (memo, query, asynCallback) {
       codeSearchAll({query: query}, function (err, entries) {
@@ -54,8 +87,25 @@ function runQueries(queries, callback) {
     //Remove duplication
     allEntries = _.uniq(allEntries, getSpecUrl);
 
-    groupByHash(allEntries, callback);
+    groupByHash(allEntries, function (error, hashes) {
+      if (error)
+        return callback(error);
+
+      forEachSpec(hashes, iter, callback);
+    });
   });
+}
+
+function forEachSpec(hashes, iter, callback) {
+  async.forEachOfLimit(hashes, parallel_limit, function (specs, hash, asyncCB) {
+    var url = getSpecUrl(specs[0]);
+    makeRequest('get', url, function (error, response, body) {
+      if (error)
+        return asyncCB(error);
+      iter(body, specs, hash);
+      asyncCB();
+    });
+  }, callback);
 }
 
 function groupByHash(entries, callback) {
