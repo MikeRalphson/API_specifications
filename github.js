@@ -11,6 +11,7 @@ var request = require('request').defaults({jar: true});
 var cheerio = require('cheerio');
 
 var baseUrl = 'https://github.com';
+var parallel_limit = 20;
 
 login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD, function (err) {
   assert(!err, err);
@@ -47,11 +48,39 @@ function runQueries(queries, callback) {
       });
   },
   function (error, allEntries) {
+    if (error)
+      return callback(error);
+
     //Remove duplication
     allEntries = _.uniq(allEntries, getSpecUrl);
 
-    callback(error, allEntries);
+    groupByHash(allEntries, callback);
   });
+}
+
+function groupByHash(entries, callback) {
+  var hashes = {};
+  async.forEachOfLimit(entries, parallel_limit,
+    function (spec, key, asyncCB) {
+      var url = getSpecUrl(spec);
+      makeRequest('head', url, function (error, response, body) {
+        if (error)
+          return asyncCB(error);
+
+        var hash = response.headers['etag'];
+        if (!hash)
+          return asyncCB(new Error('Missing hash: ' + url));
+        hash = JSON.parse(hash);//remove quotations
+
+        hashes[hash] = hashes[hash] || [];
+        hashes[hash].push(spec);
+        asyncCB();
+      })
+    },
+    function (error) {
+      callback(error, hashes);
+    }
+  );
 }
 
 function getSpecUrl(spec) {
@@ -278,7 +307,7 @@ function makeRequest(op, url, options, callback) {
   options.method = op;
 
   //Workaround: head requests has some problems with gzip
-  if (op !== 'head')
+  if (op !== 'HEAD')
     options.gzip = true;
 
   async.retry({}, function (asyncCallback) {
