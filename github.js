@@ -47,8 +47,16 @@ function runQueries(queries, callback) {
       });
   },
   function (error, allEntries) {
+    //Remove duplication
+    allEntries = _.uniq(allEntries, getSpecUrl);
+
     callback(error, allEntries);
   });
+}
+
+function getSpecUrl(spec) {
+  return ('https://raw.githubusercontent.com' + encodeURIComponent(spec.repository) + '/'
+    + spec.indexedCommit + '/' + encodeURIComponent(spec.path)).replace(/%2F/g, '/');
 }
 
 function codeSearchAll(options, callback) {
