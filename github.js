@@ -7,7 +7,7 @@ var URL = require('url');
 var _ = require('lodash');
 //require('request').debug = true;
 var async = require('async');
-var request = require('request').defaults({jar: true, gzip: true});
+var request = require('request').defaults({jar: true});
 var cheerio = require('cheerio');
 
 var baseUrl = 'https://github.com';
@@ -142,7 +142,7 @@ function getAllEntries(firstData, callback) {
 
 function login(login, password, callback) {
   var loginUrl = baseUrl + '/login';
-  request.get(loginUrl, function (error, response, html) {
+  makeRequest('get', loginUrl, function (error, response, html) {
     if (error)
       return callback(error);
 
@@ -159,6 +159,7 @@ function login(login, password, callback) {
     formData.login = login;
     formData.password = password;
 
+    //FIXME: switch to makeRequest, not working right now
     request.post(url, {form: formData}, function (error, response, body) {
       callback(error);
     });
@@ -205,10 +206,7 @@ function codeSearchImpl (options, callback) {
     url = set_url(options || {});   // generate search url
   }
 
-  console.log(' - - - - - - - - - - - - - - - - - - - - - - - - - - search url:')
-  console.log(url);
-
-  request.get(url, function (error, response, html) {
+  makeRequest('get', url, function (error, response, html) {
     if (error)
       return callback(error);
 
@@ -266,5 +264,37 @@ function codeSearchImpl (options, callback) {
     }
 
     return callback(error, list);
+  });
+}
+
+function makeRequest(op, url, options, callback) {
+  op = op.toUpperCase();
+  if (_.isFunction(options)) {
+    callback = options;
+    options = {};
+  }
+
+  options.url = url;
+  options.method = op;
+
+  //Workaround: head requests has some problems with gzip
+  if (op !== 'head')
+    options.gzip = true;
+
+  async.retry({}, function (asyncCallback) {
+    request(options, function(err, response, data) {
+      var errMsg = 'Can not ' + op + ' "' + url +'": ';
+      if (err)
+        return asyncCallback(new Error(errMsg + err));
+      if (response.statusCode !== 200)
+        return asyncCallback(new Error(errMsg + response.statusMessage));
+      asyncCallback(null, {response: response, data: data});
+    });
+  }, function (err, result) {
+    if (err)
+      return callback(err);
+
+    console.log(op + ' ' + url);
+    callback(null, result.response, result.data);
   });
 }
