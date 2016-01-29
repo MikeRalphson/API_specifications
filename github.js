@@ -10,13 +10,68 @@ var async = require('async');
 var request = require('request').defaults({jar: true});
 //require('request').debug = true;
 var cheerio = require('cheerio');
+var sqlite3 = require('sqlite3').verbose();
 
 var baseUrl = 'https://github.com';
 var parallel_limit = 20;
 
-login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD, function (err) {
-  assert(!err, err);
+var db = new sqlite3.Database('data.sqlite');
+var fields = [
+  'format',
+  'hash',
+  'repository',
+  'path',
+  'lastIndexed',
+  'indexedCommit',
+  'rawUrl'
+];
 
+initDatabase(function () {
+  login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD, function (err) {
+    assert(!err, err);
+    scrapeSpecs(function (err, formats) {
+      assert(!err, err);
+      console.log(_.mapValues(formats, _.size));
+      updateTable(formats);
+    });
+  });
+});
+
+function updateTable(formats) {
+  _.each(formats, function (hashes, format) {
+    _.each(hashes, function (specs, hash) {
+      _.each(specs, function (spec) {
+        updateRow(_.extend(spec, {
+          format: format,
+          hash: hash,
+          rawUrl: getSpecUrl(spec)
+        }));
+      });
+    });
+  });
+}
+
+function initDatabase(callback) {
+  // Set up sqlite database.
+  db.serialize(function() {
+    var listFields = fields.join(' TEXT, ') + ' TEXT';
+    db.run('CREATE TABLE IF NOT EXISTS specs (' + listFields + ', PRIMARY KEY(rawUrl))');
+    callback();
+  });
+}
+
+function updateRow(row) {
+  row = _.mapKeys(row, function (value, key) {
+    return '$' + key;
+  });
+
+  var listFields = '$' + fields.join(', $');
+  var statement = db.prepare('REPLACE INTO specs VALUES ('+ listFields + ')');
+  statement.run(row);
+  statement.finalize();
+}
+
+function scrapeSpecs(callback) {
   //raml in:path extension:raml
   //wadl in:path extension:wadl
   //apib in:path extension:apib
@@ -59,17 +114,13 @@ login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD, function
         formats.swagger_2[hash] = specs;
       else if (!_.isUndefined(spec.swaggerVersion) && !_.isUndefined(spec.info)) {
         formats.swagger_1[hash] = specs;
-        console.log('test');
       }
     },
-    function (error, allEntries) {
-      assert(!error, error);
-      console.log(_.mapValues(formats, _.size));
-      var str = JSON.stringify(formats, null, 2);
-      fs.writeFileSync('sort_result.json', str);
+    function (error) {
+      callback(error, formats);
     }
   );
-});
+}
 
 function runQueries(queries, iter, callback) {
   async.reduce(queries, [],
