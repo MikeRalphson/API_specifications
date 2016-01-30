@@ -18,13 +18,14 @@ var parallel_limit = 20;
 var db = new sqlite3.Database('data.sqlite');
 var fields = [
   'format',
-  'hash',
   'user',
   'repo',
   'path',
   'lastIndexed',
   'indexedCommit',
-  'rawUrl'
+  'size',
+  'rawUrl',
+  'hash'
 ];
 
 initDatabase(function () {
@@ -156,6 +157,12 @@ function forEachSpec(hashes, iter, callback) {
     makeRequest('get', url, function (error, response, body) {
       if (error)
         return asyncCB(error);
+
+      var size = Buffer.byteLength(body);
+      _.each(specs, function (spec) {
+        spec.size = size;
+      });
+
       iter(body, specs, hash);
       asyncCB();
     });
