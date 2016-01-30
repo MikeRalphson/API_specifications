@@ -2,7 +2,7 @@
 
 var fs = require('fs');
 var assert = require('assert');
-var URL = require('url');
+var URI = require('urijs');
 
 var _ = require('lodash');
 var YAML = require('js-yaml');
@@ -19,7 +19,8 @@ var db = new sqlite3.Database('data.sqlite');
 var fields = [
   'format',
   'hash',
-  'repository',
+  'user',
+  'repo',
   'path',
   'lastIndexed',
   'indexedCommit',
@@ -55,7 +56,8 @@ function initDatabase(callback) {
   // Set up sqlite database.
   db.serialize(function() {
     var listFields = fields.join(' TEXT, ') + ' TEXT';
-    db.run('CREATE TABLE IF NOT EXISTS specs (' + listFields + ', PRIMARY KEY(rawUrl))');
+    db.run('CREATE TABLE IF NOT EXISTS specs (' + listFields
+      + ', PRIMARY KEY(user, repo, path))');
     callback();
   });
 }
@@ -185,8 +187,11 @@ function groupByHash(entries, callback) {
 }
 
 function getSpecUrl(spec) {
-  return ('https://raw.githubusercontent.com' + encodeURIComponent(spec.repository) + '/'
-    + spec.indexedCommit + '/' + encodeURIComponent(spec.path)).replace(/%2F/g, '/');
+  return URI('https://raw.githubusercontent.com').segment([
+    spec.user,
+    spec.repo,
+    spec.indexedCommit
+  ].concat(spec.path.split('/'))).href();
 }
 
 function codeSearchAll(options, callback) {
@@ -279,7 +284,7 @@ function login(login, password, callback) {
     var $ = cheerio.load(html);
     var form = $('#login form');
     var method = form.attr('method');
-    var url = URL.resolve(loginUrl, form.attr('action'));
+    var url = URI(form.attr('action')).absoluteTo(loginUrl).href();
     var formData = {}
 
     form.find('input').each(function () {
@@ -352,18 +357,19 @@ function codeSearchImpl (options, callback) {
     var list = {};
 
     list.entries = Array.from($('.code-list-item').map(function () {
-      var fileLink = $('.title a:nth-child(2)', this);
-      var result = {
-        repository: $('.title a:first-child', this).attr('href'),
-        path: fileLink.attr('title'),
+      var fileLink = $('.title a:nth-child(2)', this).attr('href');
+
+      var match = fileLink.match(/^\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)$/);
+      if (!match)
+        callback(new Error('Invalid file link: ' + fileLink));
+
+      return {
+        user: match[1],
+        repo: match[2],
+        indexedCommit: match[3],
+        path: match[4],
         lastIndexed: $('time', this).attr('datetime')
       };
-
-      var indexedFile = fileLink.attr('href');
-      var begin = (result.repository + '/blob/').length;
-      var end = indexedFile.indexOf('/', begin);
-      result.indexedCommit = indexedFile.slice(begin, end);
-      return result;
     }));
 
     if ($('.blankslate').length > 0) {
@@ -411,9 +417,11 @@ function makeRequest(op, url, options, callback) {
   if (op !== 'HEAD')
     options.gzip = true;
 
+  var readableUrl = URI(url).readable();
+
   async.retry({}, function (asyncCallback) {
     request(options, function(err, response, data) {
-      var errMsg = 'Can not ' + op + ' "' + url +'": ';
+      var errMsg = 'Can not ' + op + ' "' + readableUrl +'": ';
       if (err)
         return asyncCallback(new Error(errMsg + err));
       if (response.statusCode !== 200)
@@ -424,7 +432,7 @@ function makeRequest(op, url, options, callback) {
     if (err)
       return callback(err);
 
-    console.log(op + ' ' + url);
+    console.log(op + ' ' + readableUrl);
     callback(null, result.response, result.data);
   });
 }
