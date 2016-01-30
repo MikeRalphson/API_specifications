@@ -32,7 +32,8 @@ initDatabase(function () {
     assert(!err, err);
     scrapeSpecs(function (err, formats) {
       assert(!err, err);
-      console.log(_.mapValues(formats, _.size));
+      console.log('Spec numbers without duplications:');
+      console.log(JSON.stringify(_.mapValues(formats, _.size), null, 2));
       updateTable(formats);
     });
   });
