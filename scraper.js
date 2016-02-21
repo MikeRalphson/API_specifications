@@ -175,8 +175,9 @@ function groupByHash(entries, callback) {
     function (spec, key, asyncCB) {
       var url = getSpecUrl(spec);
       makeRequest('head', url, function (error, response, body) {
+        //FIXME: simply ignore errors until GitHub fix bug on their side.
         if (error)
-          return asyncCB(error);
+          return asyncCB(null);
 
         var hash = response.headers['etag'];
         if (!hash)
