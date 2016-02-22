@@ -15,6 +15,8 @@ var sqlite3 = require('sqlite3').verbose();
 var baseUrl = 'https://github.com';
 var parallel_limit = 20;
 
+var skippedErrors = [];
+
 var db = new sqlite3.Database('data.sqlite');
 var fields = [
   'format',
@@ -33,6 +35,11 @@ initDatabase(function () {
     assert(!err, err);
     scrapeSpecs(function (err, formats) {
       assert(!err, err);
+      console.error('Skipped errors:');
+      _.each(skippedErrors, function (error) {
+        console.error(error);
+      });
+
       console.log('Spec numbers without duplications:');
       console.log(JSON.stringify(_.mapValues(formats, _.size), null, 2));
       updateTable(formats);
@@ -175,9 +182,11 @@ function groupByHash(entries, callback) {
     function (spec, key, asyncCB) {
       var url = getSpecUrl(spec);
       makeRequest('head', url, function (error, response, body) {
-        //FIXME: simply ignore errors until GitHub fix bug on their side.
-        if (error)
+        if (error) {
+          //FIXME: simply ignore errors until GitHub fix bug on their side.
+          skippedErrors.push(error);
           return asyncCB(null);
+        }
 
         var hash = response.headers['etag'];
         if (!hash)
