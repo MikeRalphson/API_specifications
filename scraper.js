@@ -218,14 +218,16 @@ function getSpecUrl(spec) {
 }
 
 function codeSearchAll(options, callback) {
+  var searchLimit = 1000; //Github limit on results per query
+  var _100MB = 100*1024*1024; //GitHub limit on filesize
+
   codeSearch(options, function (err, firstData) {
     if (err)
       return callback(err);
 
-    if (firstData.totalEntries <= 1000)
+    if (!firstData.incomplete && firstData.totalEntries <= searchLimit)
       return getAllEntries(firstData, callback);
 
-    assert(!firstData.incomplete, 'First call is incomplete');
     var allEntries = [];
     var begin = 0;
     var step = 1024;
@@ -235,7 +237,6 @@ function codeSearchAll(options, callback) {
     function codeSearchInterval() {
       var sizeOptions = _.cloneDeep(options);
       var end = begin + step;
-      var _100MB = 100*1024*1024; //GitHub limit on filesize
       if (end < _100MB)
         sizeOptions.query += ' size:"' + begin + '..' + end + '"';
       else
@@ -245,7 +246,7 @@ function codeSearchAll(options, callback) {
         if (err)
           return callback(err);
 
-        if (data.totalEntries > 1000 || data.incomplete) {
+        if (data.totalEntries > searchLimit || data.incomplete) {
           assert(step !== 1);
           step /= 2;
           codeSearchInterval();
@@ -259,10 +260,8 @@ function codeSearchAll(options, callback) {
               return callback(err);
 
             allEntries = allEntries.concat(entries);
-            var leftEntries = firstData.totalEntries - _.size(allEntries);
-            if (leftEntries <= 0 || begin > _100MB)
+            if (begin > _100MB)
               return callback(null, allEntries);
-            console.log('Left ' + leftEntries);
 
             codeSearchInterval();
           });
