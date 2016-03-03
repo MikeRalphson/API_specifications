@@ -15,6 +15,10 @@ var sqlite3 = require('sqlite3').verbose();
 var baseUrl = 'https://github.com';
 var parallel_limit = 20;
 
+//If you work with thousands of files on GitHub it high probability
+//that some of the files are deleted in the process, so it pretty
+//normal than couple HEAD or  GET operations fail. Just log this
+//errors with interrupting entire process and show in the end.
 var skippedErrors = [];
 
 var db = new sqlite3.Database('data.sqlite');
@@ -162,8 +166,10 @@ function forEachSpec(hashes, iter, callback) {
   async.forEachOfLimit(hashes, parallel_limit, function (specs, hash, asyncCB) {
     var url = getSpecUrl(specs[0]);
     makeRequest('get', url, function (error, response, body) {
-      if (error)
-        return asyncCB(error);
+      if (error) {
+        skippedErrors.push(error);
+        return asyncCB(null);
+      }
 
       var size = Buffer.byteLength(body);
       _.each(specs, function (spec) {
@@ -183,7 +189,6 @@ function groupByHash(entries, callback) {
       var url = getSpecUrl(spec);
       makeRequest('head', url, function (error, response, body) {
         if (error) {
-          //FIXME: simply ignore errors until GitHub fix bug on their side.
           skippedErrors.push(error);
           return asyncCB(null);
         }
