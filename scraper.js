@@ -251,6 +251,13 @@ function codeSearchAll(options, callback) {
           step /= 2;
           codeSearchInterval();
         }
+        else if (data.totalEntries === 0) {
+          begin += step+1;
+
+          //try to fast-forward to last query
+          while (begin + step < _100MB)
+            step *= 2;
+        }
         else {
           begin += step+1;
           step *= 2;
