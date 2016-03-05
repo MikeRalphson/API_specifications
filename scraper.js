@@ -328,12 +328,13 @@ function login(login, password, callback) {
  * q={query}&l={language}&o={order}&s={filter}
  */
 function set_url(options) {
-  var url = baseUrl + '/search?type=Code';
+  var url = baseUrl + '/search?';
   ['query', 'language', 'order', 'filter'].forEach(function (name) {
     var value = options[name];
     if (value)
-      url += '&' + name[0] + '=' + value
+      url += name[0] + '=' + value + '&'
   });
+  url += 'type=Code';
   return url;
 }
 
