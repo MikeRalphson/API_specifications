@@ -250,29 +250,29 @@ function codeSearchAll(options, callback) {
           assert(step !== 1);
           step /= 2;
           codeSearchInterval();
+          return;
         }
-        else if (data.totalEntries === 0) {
-          begin += step+1;
 
-          //try to fast-forward to last query
-          while (begin + step < _100MB)
+        return getAllEntries(data, function (err, entries) {
+          if (err)
+            return callback(err);
+
+          allEntries = allEntries.concat(entries);
+
+          begin += step+1;
+          if (begin > _100MB)
+            return callback(null, allEntries);
+
+          if (data.totalEntries === 0) {
+            //try to fast-forward to last query, but keep step power of 2
+            while (begin + step < _100MB)
+              step *= 2;
+          }
+          else
             step *= 2;
-        }
-        else {
-          begin += step+1;
-          step *= 2;
 
-          return getAllEntries(data, function (err, entries) {
-            if (err)
-              return callback(err);
-
-            allEntries = allEntries.concat(entries);
-            if (begin > _100MB)
-              return callback(null, allEntries);
-
-            codeSearchInterval();
-          });
-        }
+          codeSearchInterval();
+        });
       });
     }
   });
