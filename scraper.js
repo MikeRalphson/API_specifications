@@ -7,7 +7,7 @@ var URI = require('urijs');
 var _ = require('lodash');
 var YAML = require('js-yaml');
 var async = require('async');
-var request = require('request').defaults({jar: true});
+var request = require('request');
 //require('request').debug = true;
 var cheerio = require('cheerio');
 var sqlite3 = require('sqlite3').verbose();
@@ -323,8 +323,7 @@ function login(login, password, callback) {
     formData.login = login;
     formData.password = password;
 
-    //FIXME: switch to makeRequest, not working right now
-    request.post(url, {form: formData}, function (error, response, body) {
+    makeRequest('POST',  url, {expectCode: 302, form: formData}, function (error, response, body) {
       callback(error);
     });
   });
@@ -442,11 +441,13 @@ function makeRequest(op, url, options, callback) {
 
   options.url = url;
   options.method = op;
+  options.jar = true;
 
   //Workaround: head requests has some problems with gzip
   if (op !== 'HEAD')
     options.gzip = true;
 
+  var expectCode = options.expectCode || 200;
   var readableUrl = URI(url).readable();
 
   async.retry({}, function (asyncCallback) {
@@ -454,7 +455,7 @@ function makeRequest(op, url, options, callback) {
       var errMsg = 'Can not ' + op + ' "' + readableUrl +'": ';
       if (err)
         return asyncCallback(new Error(errMsg + err));
-      if (response.statusCode !== 200)
+      if (response.statusCode !== expectCode)
         return asyncCallback(new Error(errMsg + response.statusMessage));
       asyncCallback(null, {response: response, data: data});
     });
