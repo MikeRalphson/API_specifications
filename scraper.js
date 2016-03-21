@@ -7,10 +7,10 @@ var URI = require('urijs');
 var _ = require('lodash');
 var YAML = require('js-yaml');
 var async = require('async');
-var request = require('request');
-//require('request').debug = true;
 var cheerio = require('cheerio');
 var sqlite3 = require('sqlite3').verbose();
+
+var makeRequest = require('makeRequest');
 
 var baseUrl = 'https://github.com';
 var parallel_limit = 20;
@@ -429,41 +429,5 @@ function codeSearchImpl (options, callback) {
     }
 
     return callback(error, list);
-  });
-}
-
-function makeRequest(op, url, options, callback) {
-  op = op.toUpperCase();
-  if (_.isFunction(options)) {
-    callback = options;
-    options = {};
-  }
-
-  options.url = url;
-  options.method = op;
-  options.jar = true;
-
-  //Workaround: head requests has some problems with gzip
-  if (op !== 'HEAD')
-    options.gzip = true;
-
-  var expectCode = options.expectCode || 200;
-  var readableUrl = URI(url).readable();
-
-  async.retry({}, function (asyncCallback) {
-    request(options, function(err, response, data) {
-      var errMsg = 'Can not ' + op + ' "' + readableUrl +'": ';
-      if (err)
-        return asyncCallback(new Error(errMsg + err));
-      if (response.statusCode !== expectCode)
-        return asyncCallback(new Error(errMsg + response.statusMessage));
-      asyncCallback(null, {response: response, data: data});
-    });
-  }, function (err, result) {
-    if (err)
-      return callback(err);
-
-    console.log(op + ' ' + readableUrl);
-    callback(null, result.response, result.data);
   });
 }
