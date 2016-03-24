@@ -6,14 +6,19 @@ var URI = require('urijs');
 
 var _ = require('lodash');
 var YAML = require('js-yaml');
-var async = require('async');
 var cheerio = require('cheerio');
 var sqlite3 = require('sqlite3').verbose();
+var Promise = require('bluebird');
 
-var makeRequest = require('makeRequest');
+//FIXME
+var makeRequest = Promise.promisify(require('makeRequest'), {multiArgs: true});
 
 var baseUrl = 'https://github.com';
 var parallel_limit = 20;
+
+var searchLimit = 1000; //Github limit on results per query
+var _100MB = 100*1024*1024; //GitHub limit on filesize
+
 
 //If you work with thousands of files on GitHub it high probability
 //that some of the files are deleted in the process, so it pretty
@@ -35,10 +40,11 @@ var fields = [
 ];
 
 initDatabase(function () {
-  login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD, function (err) {
-    assert(!err, err);
-    scrapeSpecs(function (err, formats) {
-      assert(!err, err);
+  login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD)
+    .then(function () {
+      return scrapeSpecs()
+    })
+    .then(function (formats) {
       console.error('Skipped errors:');
       _.each(skippedErrors, function (error) {
         console.error(error);
@@ -48,7 +54,6 @@ initDatabase(function () {
       console.log(JSON.stringify(_.mapValues(formats, _.size), null, 2));
       updateTable(formats);
     });
-  });
 });
 
 function updateTable(formats) {
@@ -86,7 +91,7 @@ function updateRow(row) {
   statement.finalize();
 }
 
-function scrapeSpecs(callback) {
+function scrapeSpecs() {
   //raml in:path extension:raml
   //wadl in:path extension:wadl
   //apib in:path extension:apib
@@ -106,7 +111,7 @@ function scrapeSpecs(callback) {
     swagger_2: {},
   };
 
-  runQueries(queries,
+  return runQueries(queries,
     function (body, specs, hash) {
       var spec;
       try {
@@ -130,83 +135,64 @@ function scrapeSpecs(callback) {
       else if (!_.isUndefined(spec.swaggerVersion) && !_.isUndefined(spec.info)) {
         formats.swagger_1[hash] = specs;
       }
-    },
-    function (error) {
-      callback(error, formats);
-    }
-  );
+    }).return(formats);
 }
 
 function runQueries(queries, iter, callback) {
-  async.reduce(queries, [],
-    function (memo, query, asynCallback) {
-      codeSearchAll({query: query}, function (err, entries) {
-        if (err)
-          return asynCallback(err);
-        asynCallback(null, memo.concat(entries));
-      });
-  },
-  function (error, allEntries) {
-    if (error)
-      return callback(error);
-
-    //Remove duplication
-    allEntries = _.uniq(allEntries, getSpecUrl);
-
-    groupByHash(allEntries, function (error, hashes) {
-      if (error)
-        return callback(error);
-
-      forEachSpec(hashes, iter, callback);
+  var allEntries = [];
+  return Promise.each(queries, function (query) {
+    return codeSearchAll({query: query}, function (entry) {
+      //FIXME: investigate
+      //Array.prototype.push.bind(allEntries
+      allEntries.push(entry);
     });
+  }).then(function () {
+    //remove duplicates
+    allEntries = _.uniqBy(allEntries, getSpecUrl);
+    return groupByHash(allEntries)
+  }).then(function (hashes) {
+    return forEachSpec(hashes, iter);
   });
 }
 
-function forEachSpec(hashes, iter, callback) {
-  async.forEachOfLimit(hashes, parallel_limit, function (specs, hash, asyncCB) {
-    var url = getSpecUrl(specs[0]);
-    makeRequest('get', url, function (error, response, body) {
-      if (error) {
-        skippedErrors.push(error);
-        return asyncCB(null);
-      }
+function forEachSpec(hashes, iter) {
+  return Promise.map(_.keys(hashes), function (hash) {
+      var specs = hashes[hash];
+      //If hash is the same it don't matter which one we take content is the same
+      var url = getSpecUrl(specs[0]);
+      return makeRequest('get', url)
+        .spread(function (response, body) {
+          var size = Buffer.byteLength(body);
+          _.each(specs, function (spec) {
+            spec.size = size;
+          });
 
-      var size = Buffer.byteLength(body);
-      _.each(specs, function (spec) {
-        spec.size = size;
-      });
-
-      iter(body, specs, hash);
-      asyncCB();
-    });
-  }, callback);
+          iter(body, specs, hash);
+        })
+        .catch(function (error) {
+          skippedErrors.push(error);
+        });
+    }, {concurrency: parallel_limit});
 }
 
 function groupByHash(entries, callback) {
   var hashes = {};
-  async.forEachOfLimit(entries, parallel_limit,
-    function (spec, key, asyncCB) {
+  return Promise.map(entries, function (spec, key) {
       var url = getSpecUrl(spec);
-      makeRequest('head', url, function (error, response, body) {
-        if (error) {
+      return makeRequest('head', url)
+        .spread(function (response, body) {
+          var hash = response.headers['etag'];
+          assert(hash, 'Missing hash: ' + url);
+          hash = JSON.parse(hash);//remove quotations
+
+          hashes[hash] = hashes[hash] || [];
+          hashes[hash].push(spec);
+        })
+        .catch(function (error) {
           skippedErrors.push(error);
-          return asyncCB(null);
-        }
-
-        var hash = response.headers['etag'];
-        if (!hash)
-          return asyncCB(new Error('Missing hash: ' + url));
-        hash = JSON.parse(hash);//remove quotations
-
-        hashes[hash] = hashes[hash] || [];
-        hashes[hash].push(spec);
-        asyncCB();
-      })
-    },
-    function (error) {
-      callback(error, hashes);
-    }
-  );
+        });
+    }, {concurrency: parallel_limit})
+    .return(hashes);
 }
 
 function getSpecUrl(spec) {
@@ -217,217 +203,156 @@ function getSpecUrl(spec) {
   ].concat(spec.path.split('/'))).href();
 }
 
-function codeSearchAll(options, callback) {
-  var searchLimit = 1000; //Github limit on results per query
-  var _100MB = 100*1024*1024; //GitHub limit on filesize
-
-  codeSearch(options, function (err, firstData) {
-    if (err)
-      return callback(err);
-
+function codeSearchAll(options, iter) {
+  return codeSearch(options).then(function (firstData) {
     if (!firstData.incomplete && firstData.totalEntries <= searchLimit)
-      return getAllEntries(firstData, callback);
+      return _.each(firstData.entries, iter);
 
-    var allEntries = [];
-    var begin = 0;
-    var step = 1024;
+    return codeSearchInterval(0, 1024);
 
-    codeSearchInterval();
+    function codeSearchInterval(begin, step) {
+      if (begin > _100MB)
+        return;
 
-    function codeSearchInterval() {
-      var sizeOptions = _.cloneDeep(options);
       var end = begin + step;
-      if (end < _100MB)
-        sizeOptions.query += ' size:"' + begin + '..' + end + '"';
-      else
-        sizeOptions.query += ' size:>=' + begin
-
-      codeSearch(sizeOptions, function (err, data) {
-        if (err)
-          return callback(err);
-
+      return codeSearchLimitSize(options, begin, end).then(function (data) {
         if (data.totalEntries > searchLimit || data.incomplete) {
           assert(step !== 1);
-          step /= 2;
-          codeSearchInterval();
-          return;
+          return codeSearchInterval(begin, step / 2);
         }
 
-        return getAllEntries(data, function (err, entries) {
-          if (err)
-            return callback(err);
-
-          allEntries = allEntries.concat(entries);
-
-          begin += step+1;
-          if (begin > _100MB)
-            return callback(null, allEntries);
-
-          if (data.totalEntries === 0) {
-            //try to fast-forward to last query, but keep step power of 2
-            while (begin + step < _100MB)
-              step *= 2;
-          }
-          else
+        _.each(data.entries, iter);
+        begin += step+1;
+        step *= 2;
+        if (data.totalEntries === 0) {
+          //try to fast-forward to last query, but keep step power of 2
+          while (begin + step < _100MB)
             step *= 2;
-
-          codeSearchInterval();
-        });
+        }
+        return codeSearchInterval(begin, step);
       });
     }
   });
 }
 
-function codeSearch(options, callback) {
-  //Github allow only 10 calls per minute without login
-  //and 30 calls per minute after you login
-  setTimeout(function () {
-    codeSearchImpl(options, callback);
-  }, 2000);
+function codeSearchLimitSize(options, begin, end) {
+  var sizeOptions = _.cloneDeep(options);
+  if (end < _100MB)
+    sizeOptions.query += ' size:"' + begin + '..' + end + '"';
+  else
+    sizeOptions.query += ' size:>=' + begin
+  return codeSearch(sizeOptions);
 }
 
-function getAllEntries(firstData, callback) {
-  if (!firstData.next)
-    return callback(null, firstData.entries);
+function codeSearch(options) {
+  var url =  baseUrl + '/search?';
+  _.each(options, function (value, name) {
+    assert(['query', 'language', 'order', 'filter'].indexOf(name) !== -1);
+    url += name[0] + '=' + value + '&'
+  });
+  url += 'type=Code';
 
-  var allEntries = [];
-  process(null, firstData);
+  return codeSearchImpl(url).then(getRestOfEntries);
+}
 
-  function process(err, data) {
-    if (err)
-      return callback(err);
+function getRestOfEntries(firstData) {
+  if (firstData.totalEntries > searchLimit || firstData.incomplete) {
+    //If search incomplete or can't be finish skip rest of the entries.
+    firstData.entries = undefined;
+    return firstData;
+  }
 
-    allEntries = allEntries.concat(data.entries);
+  var allEntries = firstData.entries = [];
+  return process(firstData).return(firstData);
+
+  function process(data) {
+    Array.prototype.push.apply(allEntries, data.entries);
     if (data.next)
-      return codeSearch({next: data.next}, process);
-    callback(null, allEntries);
+      return codeSearchImpl(baseUrl + data.next).then(process);
+    return Promise.resolve();
   }
 }
 
 function login(login, password, callback) {
   var loginUrl = baseUrl + '/login';
-  makeRequest('get', loginUrl, function (error, response, html) {
-    if (error)
-      return callback(error);
+  return makeRequest('get', loginUrl)
+    .spread(function (response, html) {
+      var $ = cheerio.load(html);
+      var form = $('#login form');
+      var method = form.attr('method');
+      var url = URI(form.attr('action')).absoluteTo(loginUrl).href();
+      var formData = {}
 
-    var $ = cheerio.load(html);
-    var form = $('#login form');
-    var method = form.attr('method');
-    var url = URI(form.attr('action')).absoluteTo(loginUrl).href();
-    var formData = {}
+      form.find('input').each(function () {
+        formData[$(this).attr('name')] = $(this).attr('value');
+      });
 
-    form.find('input').each(function () {
-      formData[$(this).attr('name')] = $(this).attr('value');
+      formData.login = login;
+      formData.password = password;
+
+      return makeRequest('post',  url, {expectCode: 302, form: formData});
     });
-
-    formData.login = login;
-    formData.password = password;
-
-    makeRequest('POST',  url, {expectCode: 302, form: formData}, function (error, response, body) {
-      callback(error);
-    });
-  });
 }
 
-/**
- * format: https://github.com/search?type=Issues&
- * q={query}&l={language}&o={order}&s={filter}
- */
-function set_url(options) {
-  var url = baseUrl + '/search?';
-  ['query', 'language', 'order', 'filter'].forEach(function (name) {
-    var value = options[name];
-    if (value)
-      url += name[0] + '=' + value + '&'
-  });
-  url += 'type=Code';
-  return url;
+function codeSearchImpl(url) {
+  //Github allow only 10 calls per minute without login
+  //and 30 calls per minute after you login
+  return Promise.delay(2000)
+    .then(function () {
+      return makeRequest('get', url)
+    })
+    .spread(function (response, html) {
+      return parseGitHubPage(html);
+    });
 }
 
-/**
- * issues_search method scrapes a given GitHub repository's issues list
- * @param {object} options - options for running the issue search
- *   query    - 'mentions', 'assignee', 'author' or 'user' (defaults to author)
- *   language - 
- *   order    - 'desc' or 'asc' descending / assending respectively (default desc)
- *   filter   - 'indexed' (used in conjunction with order), '
- * see: README/issues>search
- * @param {function} callback - the callback we should call after scraping
- *  a callback passed into this method should accept two parameters:
- *  @param {objectj} error an error object (set to null if no error occurred)
- *  @param {objects} list - list of (Public) GitHub issues (for the repo)
- */
-function codeSearchImpl (options, callback) {
-  if(!callback || typeof options === 'function') {
-    callback = options;
-    return callback(400);
+function parseGitHubPage(html) {
+  var $ = cheerio.load(html);
+  if ($('.codesearch-results').length === 0) {
+    var container = $('.container');
+    if (container.length !== 0)
+      throw Error('Github return error: ' + container.text().trim());
+    throw Error('Invalid HTML');
   }
-  var url;
-  if(options.next) { // if we are parsing the next page of results!
-    url = baseUrl + options.next;
+
+  if ($('.blankslate').length > 0)
+    return {incomplete: false, totalEntries: 0}; // We couldn’t find any code
+
+  var list = {};
+
+  list.entries = Array.from($('.code-list-item').map(function () {
+    var fileLink = $('.title a:nth-child(2)', this).attr('href');
+
+    var match = fileLink.match(/^\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)$/);
+    if (!match)
+      throw Error('Invalid file link: ' + fileLink);
+
+    return {
+      user: match[1],
+      repo: match[2],
+      indexedCommit: match[3],
+      path: match[4],
+      lastIndexed: $('time', this).attr('datetime')
+    };
+  }));
+
+  var sortBar = $('.sort-bar h3');
+  if (sortBar.length === 0) {
+    //One page result
+    list.incomplete = false;
+    list.totalEntries = list.entries.length;
   }
   else {
-    url = set_url(options || {});   // generate search url
+    if ($('.octicon-question', sortBar).length > 0)
+      list.incomplete = true;//Some results may not be shown
+
+    var text = sortBar.text().match(/ ([0-9,]+) /)[1];
+    list.totalEntries = parseInt(text.replace(/,/g, ''));
   }
 
-  makeRequest('get', url, function (error, response, html) {
-    if (error)
-      return callback(error);
+  var next = $('.next_page')
+  if(next.length > 0)
+    list.next = next.attr('href');
 
-    var $ = cheerio.load(html);
-
-    if ($('.codesearch-results').length === 0) {
-      var container = $('.container');
-      if (container.length !== 0)
-        return callback(new Error('Github return error: ' + container.text().trim()));
-      return callback(new Error('Invalid HTML'));
-    }
-
-    var list = {};
-
-    list.entries = Array.from($('.code-list-item').map(function () {
-      var fileLink = $('.title a:nth-child(2)', this).attr('href');
-
-      var match = fileLink.match(/^\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)$/);
-      if (!match)
-        callback(new Error('Invalid file link: ' + fileLink));
-
-      return {
-        user: match[1],
-        repo: match[2],
-        indexedCommit: match[3],
-        path: match[4],
-        lastIndexed: $('time', this).attr('datetime')
-      };
-    }));
-
-    if ($('.blankslate').length > 0) {
-      //We couldn’t find any code
-      list.incomplete = false;
-      list.totalEntries = 0;
-    }
-    else {
-      var sortBar = $('.sort-bar h3');
-
-      if (sortBar.length === 0) {
-        //One page result
-        list.incomplete = false;
-        list.totalEntries = list.entries.length;
-      }
-      else {
-        if ($('.octicon-question', sortBar).length > 0)
-          list.incomplete = true;//Some results may not be shown
-
-        var text = sortBar.text().match(/ ([0-9,]+) /)[1];
-        list.totalEntries = parseInt(text.replace(/,/g, ''));
-      }
-    }
-
-    var next = $('.next_page')
-    if(next.length > 0) {
-      list.next = next.attr('href');
-    }
-
-    return callback(error, list);
-  });
+  return list;
 }
