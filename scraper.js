@@ -2,17 +2,16 @@
 
 var fs = require('fs');
 var assert = require('assert');
-var URI = require('urijs');
 
 var _ = require('lodash');
+var URI = require('urijs');
 var YAML = require('js-yaml');
 var cheerio = require('cheerio');
 var sqlite3 = require('sqlite3').verbose();
 var Promise = require('bluebird');
-var gcHacks = require('gc-hacks');
 
-//FIXME
-var makeRequest = Promise.promisify(require('makeRequest'), {multiArgs: true});
+var gcHacks = require('gc-hacks');
+var makeRequest = require('makeRequest');
 
 var baseUrl = 'https://github.com';
 var parallel_limit = 20;
