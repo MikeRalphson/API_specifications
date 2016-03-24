@@ -9,6 +9,7 @@ var YAML = require('js-yaml');
 var cheerio = require('cheerio');
 var sqlite3 = require('sqlite3').verbose();
 var Promise = require('bluebird');
+var gcHacks = require('gc-hacks');
 
 //FIXME
 var makeRequest = Promise.promisify(require('makeRequest'), {multiArgs: true});
@@ -301,9 +302,9 @@ function codeSearchImpl(url) {
     .then(function () {
       return makeRequest('get', url)
     })
-    .spread(function (response, html) {
+    .spread(gcHacks.recreateReturnObjectAndGcCollect(function (response, html) {
       return parseGitHubPage(html);
-    });
+    }));
 }
 
 function parseGitHubPage(html) {
