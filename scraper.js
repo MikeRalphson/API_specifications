@@ -19,12 +19,6 @@ var parallel_limit = 20;
 var searchLimit = 1000; //Github limit on results per query
 var _100MB = 100*1024*1024; //GitHub limit on filesize
 
-process.on("unhandledRejection", function(reason, promise) {
-  process.exitCode = 255;
-  //TODO: better solution
-  setTimeout(function () { throw reason; });
-});
-
 //If you work with thousands of files on GitHub it high probability
 //that some of the files are deleted in the process, so it pretty
 //normal than couple HEAD or  GET operations fail. Just log this
@@ -59,7 +53,8 @@ initDatabase(function () {
       console.log(JSON.stringify(_.mapValues(formats, _.size), null, 2));
       updateTable(formats);
       db.close();
-    });
+    })
+    .done();
 });
 
 function updateTable(formats) {
