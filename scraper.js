@@ -58,6 +58,7 @@ initDatabase(function () {
       console.log('Spec numbers without duplications:');
       console.log(JSON.stringify(_.mapValues(formats, _.size), null, 2));
       updateTable(formats);
+      db.close();
     });
 });
 
