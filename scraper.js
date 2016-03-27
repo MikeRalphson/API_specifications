@@ -123,7 +123,7 @@ function scrapeSpecs() {
           spec = YAML.safeLoad(body);
         }
         catch (e) {
-          console.log(e);
+          skippedErrors.push(Error('Can not parse: ' + getSpecUrl(specs[0])));
           return;
         }
       }
