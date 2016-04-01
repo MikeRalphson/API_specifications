@@ -252,6 +252,7 @@ function codeSearch(options) {
     url += name[0] + '=' + value + '&'
   });
   url += 'type=Code';
+  url = url.replace(/ /g, '+');
 
   return codeSearchImpl(url).then(getRestOfEntries);
 }
