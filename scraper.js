@@ -35,7 +35,6 @@ var fields = [
   'indexedCommit',
   'size',
   'rawUrl',
-  'baseUrls',
   'hash'
 ];
 
@@ -132,32 +131,11 @@ function scrapeSpecs() {
       if (!spec)
         return;
 
-      var format = null;
-      var baseUrls = [];
-
-      if (!_.isUndefined(spec.swagger)) {
-        format = 'swagger_2';
-        if (spec.schemes && spec.host) {
-          _.each(spec.schemes, function (schema) {
-            if (schema === 'http' && spec.schemes.indexOf('https') === -1)
-              return;
-            baseUrls.push(schema + '://' + spec.host + (spec.basePath || '/'));
-          });
-        }
-      }
+      if (!_.isUndefined(spec.swagger))
+        formats.swagger_2[hash] = specs;
       else if (!_.isUndefined(spec.swaggerVersion) && !_.isUndefined(spec.info)) {
-        format = 'swagger_1';
+        formats.swagger_1[hash] = specs;
       }
-
-      if (!format)
-        return;
-
-      baseUrls = baseUrls.join(',');
-      _.each(specs, function (spec) {
-        spec.baseUrls = baseUrls;
-      });
-
-      formats[format][hash] = specs;
     }).return(formats);
 }
 
