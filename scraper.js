@@ -201,7 +201,7 @@ function codeSearchDivideBySize(query, iter) {
       step *= 2;
       if (data.totalEntries === 0) {
         //try to fast-forward to last query, but keep step power of 2
-        while (begin + step < _100MB)
+        while (begin + step < sizeLimit)
           step *= 2;
       }
 
