@@ -105,8 +105,7 @@ function scrapeSpecs() {
           spec = YAML.safeLoad(body);
         }
         catch (e) {
-          skippedErrors.push(Error('Can not parse: ' + entry.rawUrl));
-          return;
+          throw Error('Can not parse: ' + entry.rawUrl);
         }
       }
 
@@ -132,23 +131,22 @@ function runQueries(queries, iter) {
         entry.rawUrl = getSpecUrl(entry);
 
         return makeRequest('get', entry.rawUrl)
-          .spread(gcHacks.recreateReturnObjectAndGcCollect(function (response, body) {
+          .spread(function (response, body) {
             var hash = response.headers['etag'];
             assert(hash, 'Missing hash: ' + entry.rawUrl);
             entry.hash = JSON.parse(hash);//remove quotations
 
             entry.size = Buffer.byteLength(body);
 
-            return iter(body, entry) || null;
-          }))
+            entry = iter(body, entry)
+            if (entry)
+              allEntries.push(gcHacks.recreateValue(entry));
+          })
           .catch(function (error) {
             console.error(error);
-            skippedErrors.push(error);
+            skippedErrors.push(gcHacks.recreateValue(error.toString()));
           });
       })
-      .then(function (entries) {
-        Array.prototype.push.apply(allEntries, _.compact(entries));
-      });
     });
   }).return(allEntries);
 }
