@@ -14,10 +14,6 @@ var gcHacks = require('gc-hacks');
 var makeRequest = require('makeRequest');
 
 var baseUrl = 'https://github.com';
-var parallel_limit = 20;
-
-var searchLimit = 1000; //Github limit on results per query
-var _100MB = 100*1024*1024; //GitHub limit on filesize
 
 //If you work with thousands of files on GitHub it high probability
 //that some of the files are deleted in the process, so it pretty
@@ -40,36 +36,24 @@ var fields = [
 
 initDatabase(function () {
   login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD)
-    .then(function () {
-      return scrapeSpecs()
-    })
-    .then(function (formats) {
+    .then(scrapeSpecs)
+    .then(function (specs) {
       console.error('Skipped errors:');
-      _.each(skippedErrors, function (error) {
-        console.error(error);
+      _.each(skippedErrors, function (err) {
+        console.error(err);
       });
 
       console.log('Spec numbers without duplications:');
-      console.log(JSON.stringify(_.mapValues(formats, _.size), null, 2));
-      updateTable(formats);
+      _(specs).uniqBy('hash').groupBy('format').mapValues(_.size)
+        .each(function (numSpecs, format) {
+          console.log(format + ': ' + numSpecs);
+        });
+
+      _.each(specs, updateRow);
       db.close();
     })
     .done();
 });
-
-function updateTable(formats) {
-  _.each(formats, function (hashes, format) {
-    _.each(hashes, function (specs, hash) {
-      _.each(specs, function (spec) {
-        updateRow(_.extend(spec, {
-          format: format,
-          hash: hash,
-          rawUrl: getSpecUrl(spec)
-        }));
-      });
-    });
-  });
-}
 
 function initDatabase(callback) {
   // Set up sqlite database.
@@ -107,13 +91,11 @@ function scrapeSpecs() {
     'swagger AND paths in:file language:JSON'
   ];
 
-  var formats = {
-    swagger_1: {},
-    swagger_2: {},
-  };
-
   return runQueries(queries,
-    function (body, specs, hash) {
+    function (body, entry) {
+      if (body === '')
+        return;
+
       var spec;
       try {
         spec = JSON.parse(body)
@@ -123,7 +105,7 @@ function scrapeSpecs() {
           spec = YAML.safeLoad(body);
         }
         catch (e) {
-          skippedErrors.push(Error('Can not parse: ' + getSpecUrl(specs[0])));
+          skippedErrors.push(Error('Can not parse: ' + entry.rawUrl));
           return;
         }
       }
@@ -132,147 +114,120 @@ function scrapeSpecs() {
         return;
 
       if (!_.isUndefined(spec.swagger))
-        formats.swagger_2[hash] = specs;
-      else if (!_.isUndefined(spec.swaggerVersion) && !_.isUndefined(spec.info)) {
-        formats.swagger_1[hash] = specs;
-      }
-    }).return(formats);
-}
-
-function runQueries(queries, iter, callback) {
-  var allEntries = [];
-  return Promise.each(queries, function (query) {
-    return codeSearchAll({query: query}, function (entry) {
-      //FIXME: investigate
-      //Array.prototype.push.bind(allEntries
-      allEntries.push(entry);
-    });
-  }).then(function () {
-    //remove duplicates
-    allEntries = _.uniqBy(allEntries, getSpecUrl);
-    return groupByHash(allEntries)
-  }).then(function (hashes) {
-    return forEachSpec(hashes, iter);
-  });
-}
-
-function forEachSpec(hashes, iter) {
-  return Promise.map(_.keys(hashes), function (hash) {
-      var specs = hashes[hash];
-      //If hash is the same it don't matter which one we take content is the same
-      var url = getSpecUrl(specs[0]);
-      return makeRequest('get', url)
-        .spread(function (response, body) {
-          var size = Buffer.byteLength(body);
-          _.each(specs, function (spec) {
-            spec.size = size;
-          });
-
-          iter(body, specs, hash);
-        })
-        .catch(function (error) {
-          skippedErrors.push(error);
-        });
-    }, {concurrency: parallel_limit});
-}
-
-function groupByHash(entries, callback) {
-  var hashes = {};
-  return Promise.map(entries, function (spec, key) {
-      var url = getSpecUrl(spec);
-      return makeRequest('head', url)
-        .spread(function (response, body) {
-          var hash = response.headers['etag'];
-          assert(hash, 'Missing hash: ' + url);
-          hash = JSON.parse(hash);//remove quotations
-
-          hashes[hash] = hashes[hash] || [];
-          hashes[hash].push(spec);
-        })
-        .catch(function (error) {
-          skippedErrors.push(error);
-        });
-    }, {concurrency: parallel_limit})
-    .return(hashes);
-}
-
-function getSpecUrl(spec) {
-  return URI('https://raw.githubusercontent.com').segment([
-    spec.user,
-    spec.repo,
-    spec.indexedCommit
-  ].concat(spec.path.split('/'))).href();
-}
-
-function codeSearchAll(options, iter) {
-  return codeSearch(options).then(function (firstData) {
-    if (!firstData.incomplete && firstData.totalEntries <= searchLimit)
-      return _.each(firstData.entries, iter);
-
-    return codeSearchInterval(0, 1024);
-
-    function codeSearchInterval(begin, step) {
-      if (begin > _100MB)
+        entry.format = 'swagger_2';
+      else if (!_.isUndefined(spec.swaggerVersion) && !_.isUndefined(spec.info))
+        entry.format = 'swagger_1';
+      else
         return;
 
-      var end = begin + step;
-      return codeSearchLimitSize(options, begin, end).then(function (data) {
-        if (data.totalEntries > searchLimit || data.incomplete) {
-          assert(step !== 1);
-          return codeSearchInterval(begin, step / 2);
-        }
+      return entry;
+    });
+}
 
-        _.each(data.entries, iter);
-        begin += step+1;
-        step *= 2;
-        if (data.totalEntries === 0) {
-          //try to fast-forward to last query, but keep step power of 2
-          while (begin + step < _100MB)
-            step *= 2;
-        }
-        return codeSearchInterval(begin, step);
+function runQueries(queries, iter) {
+  var allEntries = [];
+  return Promise.each(queries, function (query) {
+    return codeSearch(query, function (entries) {
+      return Promise.map(entries, function (entry) {
+        entry.rawUrl = getSpecUrl(entry);
+
+        return makeRequest('get', entry.rawUrl)
+          .spread(gcHacks.recreateReturnObjectAndGcCollect(function (response, body) {
+            var hash = response.headers['etag'];
+            assert(hash, 'Missing hash: ' + entry.rawUrl);
+            entry.hash = JSON.parse(hash);//remove quotations
+
+            entry.size = Buffer.byteLength(body);
+
+            return iter(body, entry) || null;
+          }))
+          .catch(function (error) {
+            console.error(error);
+            skippedErrors.push(error);
+          });
+      })
+      .then(function (entries) {
+        Array.prototype.push.apply(allEntries, _.compact(entries));
       });
+    });
+  }).return(allEntries);
+}
+
+function getSpecUrl(entry) {
+  return URI('https://raw.githubusercontent.com').segment([
+    entry.user,
+    entry.repo,
+    entry.indexedCommit
+  ].concat(entry.path.split('/'))).href();
+}
+
+function makeSearchUrl(query, begin, end) {
+  if (_.isNumber(begin) && _.isNumber(end))
+    query += ' size:"' + begin + '..' + end + '"';
+  query = query.replace(/ /g, '+');
+  return baseUrl + '/search?q=' + query + '&type=Code';
+}
+
+function codeSearch(query, iter) {
+  return codeSearchImpl(makeSearchUrl(query))
+    .then(function (data) {
+       if (!isIncomplete(data))
+         return iterateAllResults(data, iter);
+       else
+         return codeSearchDivideBySize(query, iter);
+    });
+}
+
+function codeSearchDivideBySize(query, iter) {
+  return Promise.coroutine(function* () {
+    var sizeLimit = 384*1024; //Only files smaller than 384 KB are searchable.
+
+    var begin = 0;
+    var step = 1024;
+
+    while (begin <= sizeLimit) {
+      var end = begin + step;
+      if (end > sizeLimit)
+        end = sizeLimit;
+
+      var url = makeSearchUrl(query, begin, end);
+      var data = yield codeSearchImpl(url);
+
+      if (isIncomplete(data)) {
+        assert(step !== 1);
+        step /= 2;
+        continue;
+      }
+
+      begin += step+1;
+      step *= 2;
+      if (data.totalEntries === 0) {
+        //try to fast-forward to last query, but keep step power of 2
+        while (begin + step < _100MB)
+          step *= 2;
+      }
+
+      yield iterateAllResults(data, iter);
     }
-  });
+  })();
 }
 
-function codeSearchLimitSize(options, begin, end) {
-  var sizeOptions = _.cloneDeep(options);
-  if (end < _100MB)
-    sizeOptions.query += ' size:"' + begin + '..' + end + '"';
-  else
-    sizeOptions.query += ' size:>=' + begin
-  return codeSearch(sizeOptions);
+function isIncomplete(data) {
+  var searchLimit = 1000; //Github limit on results per query
+  return data.totalEntries > searchLimit || data.incomplete;
 }
 
-function codeSearch(options) {
-  var url =  baseUrl + '/search?';
-  _.each(options, function (value, name) {
-    assert(['query', 'language', 'order', 'filter'].indexOf(name) !== -1);
-    url += name[0] + '=' + value + '&'
-  });
-  url += 'type=Code';
-  url = url.replace(/ /g, '+');
+function iterateAllResults(data, iter) {
+  return Promise.coroutine(function* () {
+    while (true) {
+      if (!_.isEmpty(data.entries))
+        yield iter(data.entries);
 
-  return codeSearchImpl(url).then(getRestOfEntries);
-}
-
-function getRestOfEntries(firstData) {
-  if (firstData.totalEntries > searchLimit || firstData.incomplete) {
-    //If search incomplete or can't be finish skip rest of the entries.
-    firstData.entries = undefined;
-    return firstData;
-  }
-
-  var allEntries = firstData.entries = [];
-  return process(firstData).return(firstData);
-
-  function process(data) {
-    Array.prototype.push.apply(allEntries, data.entries);
-    if (data.next)
-      return codeSearchImpl(baseUrl + data.next).then(process);
-    return Promise.resolve();
-  }
+      if (!data.next)
+        break;
+      data = yield codeSearchImpl(baseUrl + data.next);
+    }
+  })();
 }
 
 function login(login, password, callback) {
@@ -296,12 +251,19 @@ function login(login, password, callback) {
     });
 }
 
+var timeOfLastCall = Date.now()
 function codeSearchImpl(url) {
   //Github allow only 10 calls per minute without login
   //and 30 calls per minute after you login
-  return Promise.delay(2000)
+  var delay = 2000 - (Date.now() - timeOfLastCall);
+  console.log(delay);
+  return Promise.delay(delay >= 0 ? delay : 0)
     .then(function () {
       return makeRequest('get', url)
+    })
+    .then(function (value) {
+      timeOfLastCall = Date.now();
+      return value;
     })
     .spread(gcHacks.recreateReturnObjectAndGcCollect(function (response, html) {
       return parseGitHubPage(html);
