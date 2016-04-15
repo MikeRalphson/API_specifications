@@ -49,7 +49,6 @@ initDatabase(function () {
           console.log(format + ': ' + numSpecs);
         });
 
-      _.each(specs, updateRow);
       db.close();
     })
     .done();
@@ -139,8 +138,10 @@ function runQueries(queries, iter) {
             entry.size = Buffer.byteLength(body);
 
             entry = iter(body, entry)
-            if (entry)
+            if (entry) {
+              updateRow(entry);
               allEntries.push(gcHacks.recreateValue(entry));
+            }
           })
           .catch(function (error) {
             console.error(error);
