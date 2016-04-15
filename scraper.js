@@ -146,7 +146,7 @@ function runQueries(queries, iter) {
             console.error(error);
             skippedErrors.push(gcHacks.recreateValue(error.toString()));
           });
-      })
+      }, {concurrency: 5});
     });
   }).return(allEntries);
 }
