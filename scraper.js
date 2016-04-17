@@ -24,6 +24,7 @@ var skippedErrors = [];
 var db = new sqlite3.Database('data.sqlite');
 var fields = [
   'format',
+  'dataFormat',
   'user',
   'repo',
   'path',
@@ -98,10 +99,12 @@ function scrapeSpecs() {
       var spec;
       try {
         spec = JSON.parse(body)
+        entry.dataFormat = 'JSON';
       }
       catch (e) {
         try {
           spec = YAML.safeLoad(body);
+          entry.dataFormat = 'YAML';
         }
         catch (e) {
           throw Error('Can not parse: ' + entry.rawUrl);
