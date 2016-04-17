@@ -21,59 +21,54 @@ var baseUrl = 'https://github.com';
 //errors with interrupting entire process and show in the end.
 var skippedErrors = [];
 
-var db = new sqlite3.Database('data.sqlite');
-var fields = [
-  'format',
-  'dataFormat',
-  'user',
-  'repo',
-  'path',
-  'lastIndexed',
-  'indexedCommit',
-  'size',
-  'rawUrl',
-  'hash'
-];
+login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD)
+  .then(scrapeSpecs)
+  .then(function (specs) {
+    console.error('Skipped errors:');
+    _.each(skippedErrors, function (err) {
+      console.error(err);
+    });
 
-initDatabase(function () {
-  login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD)
-    .then(scrapeSpecs)
-    .then(function (specs) {
-      console.error('Skipped errors:');
-      _.each(skippedErrors, function (err) {
-        console.error(err);
+    console.log('Spec numbers without duplications:');
+    _(specs).uniqBy('hash').groupBy('format').mapValues(_.size)
+      .each(function (numSpecs, format) {
+        console.log(format + ': ' + numSpecs);
       });
 
-      console.log('Spec numbers without duplications:');
-      _(specs).uniqBy('hash').groupBy('format').mapValues(_.size)
-        .each(function (numSpecs, format) {
-          console.log(format + ': ' + numSpecs);
-        });
+    updateRows(specs);
+  })
+  .done();
 
-      db.close();
-    })
-    .done();
-});
+function updateRows(rows) {
+  var db = new sqlite3.Database('data.sqlite');
+  var fields = [
+    'format',
+    'dataFormat',
+    'user',
+    'repo',
+    'path',
+    'lastIndexed',
+    'indexedCommit',
+    'size',
+    'rawUrl',
+    'hash'
+  ];
 
-function initDatabase(callback) {
-  // Set up sqlite database.
-  db.serialize(function() {
-    var listFields = fields.join(' TEXT, ') + ' TEXT';
-    db.run('CREATE TABLE IF NOT EXISTS specs (' + listFields
-      + ', PRIMARY KEY(user, repo, path))');
-    callback();
-  });
-}
-
-function updateRow(row) {
-  row = _.mapKeys(row, function (value, key) {
-    return '$' + key;
-  });
+  var listFields = fields.join(' TEXT, ') + ' TEXT';
+  db.run('CREATE TABLE IF NOT EXISTS specs (' + listFields
+    + ', PRIMARY KEY(user, repo, path))');
 
   var listFields = '$' + fields.join(', $');
   var statement = db.prepare('REPLACE INTO specs VALUES ('+ listFields + ')');
-  statement.run(row);
+  _.each(rows, function (row) {
+    row = _.mapKeys(row, function (value, key) {
+      return '$' + key;
+    });
+
+    statement.run(row);
+  })
   statement.finalize();
+  db.close();
 }
 
 function scrapeSpecs() {
@@ -141,10 +136,8 @@ function runQueries(queries, iter) {
             entry.size = Buffer.byteLength(body);
 
             entry = iter(body, entry)
-            if (entry) {
-              updateRow(entry);
+            if (entry)
               allEntries.push(gcHacks.recreateValue(entry));
-            }
           })
           .catch(function (error) {
             console.error(error);
