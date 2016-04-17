@@ -162,15 +162,8 @@ function getSpecUrl(entry) {
   ].concat(entry.path.split('/'))).href();
 }
 
-function makeSearchUrl(query, begin, end) {
-  if (_.isNumber(begin) && _.isNumber(end))
-    query += ' size:"' + begin + '..' + end + '"';
-  query = query.replace(/ /g, '+');
-  return baseUrl + '/search?q=' + query + '&type=Code';
-}
-
 function codeSearch(query, iter) {
-  return codeSearchImpl(makeSearchUrl(query))
+  return runQueryImpl(query)
     .then(function (data) {
        if (!isIncomplete(data))
          return iterateAllResults(data, iter);
@@ -179,20 +172,16 @@ function codeSearch(query, iter) {
     });
 }
 
+var sizeLimit = 384*1024; //Only files smaller than 384 KB are searchable.
 function codeSearchDivideBySize(query, iter) {
   return Promise.coroutine(function* () {
-    var sizeLimit = 384*1024; //Only files smaller than 384 KB are searchable.
 
     var begin = 0;
     var step = 1024;
 
     while (begin <= sizeLimit) {
-      var end = begin + step;
-      if (end > sizeLimit)
-        end = sizeLimit;
-
-      var url = makeSearchUrl(query, begin, end);
-      var data = yield codeSearchImpl(url);
+      var filter = sizeFilter(begin, begin + step);
+      var data = yield runQueryImpl(query + filter);
 
       if (isIncomplete(data)) {
         assert(step !== 1);
@@ -213,9 +202,24 @@ function codeSearchDivideBySize(query, iter) {
   })();
 }
 
+function sizeFilter(begin, end) {
+  var sizeFilter = ' size:';
+  if (end < sizeLimit)
+    sizeFilter += begin + '..' + end;
+  else
+    sizeFilter += '>=' + begin;
+  return sizeFilter;
+}
+
 function isIncomplete(data) {
   var searchLimit = 1000; //Github limit on results per query
   return data.totalEntries > searchLimit || data.incomplete;
+}
+
+function runQueryImpl(query) {
+  query = query.replace(/ /g, '+');
+  var url = baseUrl + '/search?q=' + query + '&type=Code';
+  return codeSearchImpl(url);
 }
 
 function iterateAllResults(data, iter) {
