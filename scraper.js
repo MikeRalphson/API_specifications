@@ -2,6 +2,7 @@
 
 var fs = require('fs');
 var assert = require('assert');
+var crypto = require('crypto');
 
 var _ = require('lodash');
 var URI = require('urijs');
@@ -9,6 +10,7 @@ var YAML = require('js-yaml');
 var cheerio = require('cheerio');
 var sqlite3 = require('sqlite3').verbose();
 var Promise = require('bluebird');
+var sortobject = require('deep-sort-object');
 
 var gcHacks = require('gc-hacks');
 var makeRequest = require('makeRequest');
@@ -50,7 +52,6 @@ function updateRows(rows) {
     'lastIndexed',
     'indexedCommit',
     'size',
-    'rawUrl',
     'hash'
   ];
 
@@ -91,24 +92,24 @@ function scrapeSpecs() {
       if (body === '')
         return;
 
-      var spec;
       try {
-        spec = JSON.parse(body)
+        entry.spec = JSON.parse(body)
         entry.dataFormat = 'JSON';
       }
       catch (e) {
         try {
-          spec = YAML.safeLoad(body);
+          entry.spec = YAML.safeLoad(body);
           entry.dataFormat = 'YAML';
         }
         catch (e) {
-          throw Error('Can not parse: ' + entry.rawUrl);
+          throw Error('Can not parse: ' + getSpecUrl(entry));
         }
       }
 
-      if (!spec)
+      if (!entry.spec)
         return;
 
+      var spec = entry.spec;
       if (!_.isUndefined(spec.swagger))
         entry.format = 'swagger_2';
       else if (!_.isUndefined(spec.swaggerVersion) && !_.isUndefined(spec.info))
@@ -125,19 +126,20 @@ function runQueries(queries, iter) {
   return Promise.each(queries, function (query) {
     return codeSearch(query, function (entries) {
       return Promise.map(entries, function (entry) {
-        entry.rawUrl = getSpecUrl(entry);
-
-        return makeRequest('get', entry.rawUrl, {silent: true})
+        return makeRequest('get', getSpecUrl(entry), {silent: true})
           .spread(function (response, body) {
-            var hash = response.headers['etag'];
-            assert(hash, 'Missing hash: ' + entry.rawUrl);
-            entry.hash = JSON.parse(hash);//remove quotations
-
             entry.size = Buffer.byteLength(body);
 
             entry = iter(body, entry)
-            if (entry)
-              allEntries.push(gcHacks.recreateValue(entry));
+            if (!entry)
+              return;
+
+            var serializeSpec = JSON.stringify(sortobject(entry.spec));
+            delete entry.spec;
+
+            entry.hash = hash(serializeSpec);
+
+            allEntries.push(gcHacks.recreateValue(entry));
           })
           .catch(function (error) {
             console.error(error);
@@ -146,6 +148,10 @@ function runQueries(queries, iter) {
       }, {concurrency: 5});
     });
   }).return(allEntries);
+}
+
+function hash(str) {
+  return crypto.createHash('md5').update(str).digest('hex');
 }
 
 function getSpecUrl(entry) {
