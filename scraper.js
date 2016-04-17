@@ -132,7 +132,7 @@ function runQueries(queries, iter) {
       return Promise.map(entries, function (entry) {
         entry.rawUrl = getSpecUrl(entry);
 
-        return makeRequest('get', entry.rawUrl)
+        return makeRequest('get', entry.rawUrl, {silent: true})
           .spread(function (response, body) {
             var hash = response.headers['etag'];
             assert(hash, 'Missing hash: ' + entry.rawUrl);
@@ -258,7 +258,6 @@ function codeSearchImpl(url) {
   //Github allow only 10 calls per minute without login
   //and 30 calls per minute after you login
   var delay = 2000 - (Date.now() - timeOfLastCall);
-  console.log(delay);
   return Promise.delay(delay >= 0 ? delay : 0)
     .then(function () {
       return makeRequest('get', url)
