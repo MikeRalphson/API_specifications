@@ -26,6 +26,8 @@ var skippedErrors = [];
 login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD)
   .then(scrapeSpecs)
   .then(function (specs) {
+    updateDB(specs);
+
     console.error('Skipped errors:');
     _.each(skippedErrors, function (err) {
       console.error(err);
@@ -36,39 +38,45 @@ login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD)
       .each(function (numSpecs, format) {
         console.log(format + ': ' + numSpecs);
       });
-
-    updateRows(specs);
   })
   .done();
 
-function updateRows(rows) {
+function updateDB(specs) {
   var db = new sqlite3.Database('data.sqlite');
-  var fields = [
-    'format',
-    'dataFormat',
-    'user',
-    'repo',
-    'path',
-    'lastIndexed',
-    'indexedCommit',
-    'size',
-    'hash'
-  ];
 
-  var listFields = fields.join(' TEXT, ') + ' TEXT';
-  db.run('CREATE TABLE IF NOT EXISTS specs (' + listFields
-    + ', PRIMARY KEY(user, repo, path))');
+  db.serialize(function() {
+    var fields = [
+      'format',
+      'dataFormat',
+      'user',
+      'repo',
+      'path',
+      'lastIndexed',
+      'indexedCommit',
+      'size',
+      'hash'
+    ];
 
-  var listFields = '$' + fields.join(', $');
-  var statement = db.prepare('REPLACE INTO specs VALUES ('+ listFields + ')');
-  _.each(rows, function (row) {
-    row = _.mapKeys(row, function (value, key) {
-      return '$' + key;
+    var listFields = fields.join(' TEXT, ') + ' TEXT';
+    db.run('CREATE TABLE IF NOT EXISTS specs (' + listFields
+      + ', PRIMARY KEY(user, repo, path))');
+
+    db.run('DELETE FROM specs');
+
+    db.parallelize(function() {
+      var listFields = '$' + fields.join(', $');
+      var statement = db.prepare('REPLACE INTO specs VALUES ('+ listFields + ')');
+      _.each(specs, function (spec) {
+        var row = _.mapKeys(spec, function (value, key) {
+          return '$' + key;
+        });
+
+        statement.run(row);
+      })
+      statement.finalize();
     });
+  });
 
-    statement.run(row);
-  })
-  statement.finalize();
   db.close();
 }
 
@@ -300,7 +308,7 @@ function parseGitHubPage(html) {
       repo: match[2],
       indexedCommit: match[3],
       path: match[4],
-      lastIndexed: $('time', this).attr('datetime')
+      lastIndexed: $('time', this).attr('datetime') || ''
     };
   }));
 
