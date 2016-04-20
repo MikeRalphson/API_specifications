@@ -1,6 +1,7 @@
 'use strict';
 
 var fs = require('fs');
+var zlib = require('zlib');
 var assert = require('assert');
 var crypto = require('crypto');
 
@@ -25,8 +26,12 @@ var skippedErrors = [];
 
 login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD)
   .then(scrapeSpecs)
-  .then(function (specs) {
-    updateDB(specs);
+  .spread(function (specs, hashes) {
+    specs = _.uniqBy(specs, function (spec) {
+      return _(spec).pick(['user', 'repo', 'path']).values().join('/');
+    });
+
+    updateDB(specs, hashes);
 
     console.error('Skipped errors:');
     _.each(skippedErrors, function (err) {
@@ -41,7 +46,7 @@ login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD)
   })
   .done();
 
-function updateDB(specs) {
+function updateDB(specs, hashes) {
   var db = new sqlite3.Database('data.sqlite');
 
   db.serialize(function() {
@@ -63,9 +68,10 @@ function updateDB(specs) {
 
     db.run('DELETE FROM specs');
 
+    console.log('Save "specs" to DB');
     db.parallelize(function() {
       var listFields = '$' + fields.join(', $');
-      var statement = db.prepare('REPLACE INTO specs VALUES ('+ listFields + ')');
+      var statement = db.prepare('INSERT INTO specs VALUES ('+ listFields + ')');
       _.each(specs, function (spec) {
         var row = _.mapKeys(spec, function (value, key) {
           return '$' + key;
@@ -75,6 +81,33 @@ function updateDB(specs) {
       })
       statement.finalize();
     });
+
+    var date = (new Date()).toISOString();
+
+    db.run('CREATE TABLE IF NOT EXISTS hashes ' +
+           '(hash TEXT, data BLOB, lastSeen TEXT, PRIMARY KEY(hash))');
+
+    console.log('Save "hashes" to DB');
+    db.parallelize(function() {
+      var statement = db.prepare('REPLACE INTO hashes VALUES (?,?,?)');
+      _.each(hashes, function (data, hash) {
+        statement.run([
+          hash,
+          data,
+          date
+        ]);
+      })
+      statement.finalize();
+    });
+
+    db.run('CREATE TABLE IF NOT EXISTS specs_archive ' +
+           '(date TEXT, specs BLOB, PRIMARY KEY(date))');
+
+    console.log('Append to "specs_archive"');
+    db.run('INSERT INTO specs_archive VALUES (?,?)', [
+      date,
+      zlib.gzipSync(JSON.stringify(specs))
+    ]);
   });
 
   db.close();
@@ -130,6 +163,7 @@ function scrapeSpecs() {
 }
 
 function runQueries(queries, iter) {
+  var hashes = {};
   var allEntries = [];
   return Promise.each(queries, function (query) {
     return codeSearch(query, function (entries) {
@@ -146,6 +180,8 @@ function runQueries(queries, iter) {
             delete entry.spec;
 
             entry.hash = hash(serializeSpec);
+            if (!hashes[entry.hash])
+              hashes[entry.hash] = zlib.gzipSync(serializeSpec);
 
             allEntries.push(gcHacks.recreateValue(entry));
           })
@@ -155,7 +191,7 @@ function runQueries(queries, iter) {
           });
       }, {concurrency: 5});
     });
-  }).return(allEntries);
+  }).return([allEntries, hashes]);
 }
 
 function hash(str) {
