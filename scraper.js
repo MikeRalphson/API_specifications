@@ -20,8 +20,8 @@ var baseUrl = 'https://github.com';
 
 //If you work with thousands of files on GitHub it high probability
 //that some of the files are deleted in the process, so it pretty
-//normal than couple HEAD or  GET operations fail. Just log this
-//errors with interrupting entire process and show in the end.
+//normal that a couple of HEAD or GET operations fail. Just log these
+//errors without interrupting the entire process and show at the end.
 var skippedErrors = [];
 
 login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD)
@@ -127,6 +127,8 @@ function scrapeSpecs() {
     'filename:openapi extension:json -language:json',
     'swaggerVersion AND info in:file language:YAML',
     'swaggerVersion AND info in:file language:JSON',
+    'openapi AND paths in:file language:YAML',
+    'openapi AND paths in:file language:JSON',
     'swagger AND paths in:file language:YAML',
     'swagger AND paths in:file language:JSON'
   ];
@@ -154,7 +156,9 @@ function scrapeSpecs() {
         return;
 
       var spec = entry.spec;
-      if (!_.isUndefined(spec.swagger))
+      if (!_.isUndefined(spec.openapi))
+        entry.format = 'openapi_3';
+      else if (!_.isUndefined(spec.swagger))
         entry.format = 'swagger_2';
       else if (!_.isUndefined(spec.swaggerVersion) && !_.isUndefined(spec.info))
         entry.format = 'swagger_1';
