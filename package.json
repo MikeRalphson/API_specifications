@@ -2,7 +2,7 @@
   "private": true,
   "dependencies": {
     "bluebird": "^3.3.4",
-    "cheerio": "^0.19.0",
+    "cheerio": "^0.22.0",
     "deep-sort-object": "^1.0.1",
     "gc-hacks": "^1.0.3",
     "js-yaml": "^3.5.2",
