@@ -20,7 +20,8 @@ fetch.Promise = Promise;
 var gcHacks = require('gc-hacks');
 
 var baseUrl = 'https://github.com';
-var cookies = [];
+var cookies = '';
+var prevUrl = '';
 
 //If you work with thousands of files on GitHub it high probability
 //that some of the files are deleted in the process, so it pretty
@@ -29,10 +30,8 @@ var cookies = [];
 var skippedErrors = [];
 
 login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD)
-  .then(function(html){
-    scrapeSpecs
-  })
-  .then(function (specs, hashes) {
+  .then(scrapeSpecs)
+  .spread(function (specs, hashes) {
     specs = _.uniqBy(specs, function (spec) {
       return _(spec).pick(['user', 'repo', 'path']).values().join('/');
     });
@@ -140,8 +139,10 @@ function scrapeSpecs() {
 
   return runQueries(queries,
     function (body, entry) {
-      if (body === '')
+      if (body === '') {
+	console.warn('No body');
         return;
+      }
 
       try {
         entry.spec = JSON.parse(body)
@@ -178,15 +179,18 @@ function fetchit(url, options) {
   return new Promise(function(resolve, reject){
     options = Object.assign({ headers: {} }, options);
     console.log((options.method || 'GET') + ' ' +url);
-    if (cookies.length) {
-      options.headers.cookie = cookies.join('\n'); 
+    if (cookies) {
+      options.headers.cookie = cookies; 
+    }
+    if (prevUrl) {
+      options.headers.referer = prevUrl;
     }
     fetch(url, options)
     .then(function(res){
-      console.warn(util.inspect(res.headers,{depth:null,colors:true}));
+      prevUrl = url;
       if (res.headers.get('set-cookie')) {
-        cookies = cookies.concat(res.headers.get('set-cookie'));
-        console.log('Cookies in jar:', cookies.length);
+        cookies = res.headers.get('set-cookie');
+        console.log('Cookies in jar:', cookies.split(', ').length);
       }
       return res.text();
     })
@@ -348,7 +352,7 @@ function login(login, password, callback) {
       formData.append('login_field', login);
       formData.append('password', password);
 
-      return fetchit(url, {method: 'post', body: formData});
+      return fetchit(url, {method: 'POST', body: formData});
     });
 }
 
@@ -365,7 +369,7 @@ function codeSearchImpl(url) {
       timeOfLastCall = Date.now();
       return value;
     })
-    .then(gcHacks.recreateReturnObjectAndGcCollect(function (response, html) {
+    .then(gcHacks.recreateReturnObjectAndGcCollect(function (html) {
       return parseGitHubPage(html);
     }));
 }
@@ -387,7 +391,8 @@ function parseGitHubPage(html) {
   var list = {};
 
   list.entries = Array.from($('.code-list-item').map(function () {
-    var fileLink = $('.title a:nth-child(2)', this).attr('href');
+    //var fileLink = $('.title a:nth-child(2)', this).attr('href');
+    var fileLink = $('a:nth-child(2)', this).attr('href');
 
     var match = fileLink.match(/^\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)$/);
     if (!match)
