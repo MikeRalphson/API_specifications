@@ -303,7 +303,7 @@ function login(login, password, callback) {
       formData.login_field = login;
       formData.password = password;
 
-      return makeRequest('post',  url, {expectCode: 302, form: formData});
+      return makeRequest('post',  url, {expectCode: 200, form: formData});
     });
 }
 
