@@ -1,6 +1,7 @@
 'use strict';
 
 var fs = require('fs');
+var util = require('util');
 var zlib = require('zlib');
 var assert = require('assert');
 var crypto = require('crypto');
@@ -12,11 +13,14 @@ var cheerio = require('cheerio');
 var sqlite3 = require('sqlite3').verbose();
 var Promise = require('bluebird');
 var sortobject = require('deep-sort-object');
+const { URLSearchParams } = require('url');
+var fetch = require('node-fetch');
+fetch.Promise = Promise;
 
 var gcHacks = require('gc-hacks');
-var makeRequest = require('makeRequest');
 
 var baseUrl = 'https://github.com';
+var cookies = [];
 
 //If you work with thousands of files on GitHub it high probability
 //that some of the files are deleted in the process, so it pretty
@@ -25,8 +29,10 @@ var baseUrl = 'https://github.com';
 var skippedErrors = [];
 
 login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD)
-  .then(scrapeSpecs)
-  .spread(function (specs, hashes) {
+  .then(function(html){
+    scrapeSpecs
+  })
+  .then(function (specs, hashes) {
     specs = _.uniqBy(specs, function (spec) {
       return _(spec).pick(['user', 'repo', 'path']).values().join('/');
     });
@@ -43,8 +49,7 @@ login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD)
       .each(function (numSpecs, format) {
         console.log(format + ': ' + numSpecs);
       });
-  })
-  .done();
+  });
 
 function updateDB(specs, hashes) {
   var db = new sqlite3.Database('data.sqlite');
@@ -148,7 +153,7 @@ function scrapeSpecs() {
           entry.dataFormat = 'YAML';
         }
         catch (e) {
-          throw Error('Can not parse: ' + getSpecUrl(entry));
+          throw Error('Cannot parse: ' + getSpecUrl(entry));
         }
       }
 
@@ -169,14 +174,39 @@ function scrapeSpecs() {
     });
 }
 
+function fetchit(url, options) {
+  return new Promise(function(resolve, reject){
+    options = Object.assign({ headers: {} }, options);
+    console.log((options.method || 'GET') + ' ' +url);
+    if (cookies.length) {
+      options.headers.cookie = cookies.join('\n'); 
+    }
+    fetch(url, options)
+    .then(function(res){
+      console.warn(util.inspect(res.headers,{depth:null,colors:true}));
+      if (res.headers.get('set-cookie')) {
+        cookies = cookies.concat(res.headers.get('set-cookie'));
+        console.log('Cookies in jar:', cookies.length);
+      }
+      return res.text();
+    })
+    .then(function(text){
+      return resolve(text);
+    })
+    .catch(function(ex) {
+      return reject(ex);
+    });
+  });
+}
+
 function runQueries(queries, iter) {
   var hashes = {};
   var allEntries = [];
   return Promise.each(queries, function (query) {
     return codeSearch(query, function (entries) {
       return Promise.map(entries, function (entry) {
-        return makeRequest('get', getSpecUrl(entry), {silent: true})
-          .spread(function (response, body) {
+        return fetchit(getSpecUrl(entry))
+          .then(function (body) {
             entry.size = Buffer.byteLength(body);
 
             entry = iter(body, entry)
@@ -286,24 +316,39 @@ function iterateAllResults(data, iter) {
   })();
 }
 
+function dumpHtml(html) {
+  fs.writeFileSync('./invalid.html',html,'utf8');
+}
+
 function login(login, password, callback) {
   var loginUrl = baseUrl + '/login';
-  return makeRequest('get', loginUrl)
-    .spread(function (response, html) {
-      var $ = cheerio.load(html);
+  return fetchit(loginUrl)
+    .then(function (html) {
+      var $;
+      try {
+        $ = cheerio.load(html);
+      }
+      catch (ex) {
+        console.warn(ex.message);
+        dumpHtml(html);
+        $ = cheerio.load('');
+      }
       var form = $('form').first();
       var method = form.attr('method');
       var url = URI(form.attr('action')).absoluteTo(loginUrl).href();
-      var formData = {}
+      var formData = new URLSearchParams();
 
       form.find('input').each(function () {
-        formData[$(this).attr('name')] = $(this).attr('value');
+	var name = $(this).attr('name');
+        var value = $(this).attr('value');
+	if (name && value)
+          formData.append(name, value);
       });
 
-      formData.login_field = login;
-      formData.password = password;
+      formData.append('login_field', login);
+      formData.append('password', password);
 
-      return makeRequest('post',  url, {expectCode: 200, form: formData});
+      return fetchit(url, {method: 'post', body: formData});
     });
 }
 
@@ -314,13 +359,13 @@ function codeSearchImpl(url) {
   var delay = 2000 - (Date.now() - timeOfLastCall);
   return Promise.delay(delay >= 0 ? delay : 0)
     .then(function () {
-      return makeRequest('get', url)
+      return fetchit(url)
     })
     .then(function (value) {
       timeOfLastCall = Date.now();
       return value;
     })
-    .spread(gcHacks.recreateReturnObjectAndGcCollect(function (response, html) {
+    .then(gcHacks.recreateReturnObjectAndGcCollect(function (response, html) {
       return parseGitHubPage(html);
     }));
 }
@@ -328,9 +373,11 @@ function codeSearchImpl(url) {
 function parseGitHubPage(html) {
   var $ = cheerio.load(html);
   if ($('.codesearch-results').length === 0) {
-    var container = $('.container');
-    if (container.length !== 0)
+    var container = $('.container-lg');
+    if (container.length !== 0) {
+      dumpHtml(html);
       throw Error('Github return error: ' + container.text().trim());
+    }
     throw Error('Invalid HTML');
   }
 
