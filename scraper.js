@@ -291,7 +291,7 @@ function login(login, password, callback) {
   return makeRequest('get', loginUrl)
     .spread(function (response, html) {
       var $ = cheerio.load(html);
-      var form = $('#login form');
+      var form = $('form').first();
       var method = form.attr('method');
       var url = URI(form.attr('action')).absoluteTo(loginUrl).href();
       var formData = {}
@@ -300,7 +300,7 @@ function login(login, password, callback) {
         formData[$(this).attr('name')] = $(this).attr('value');
       });
 
-      formData.login = login;
+      formData.login_field = login;
       formData.password = password;
 
       return makeRequest('post',  url, {expectCode: 302, form: formData});
