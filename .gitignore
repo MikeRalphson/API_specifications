@@ -1,6 +1,8 @@
 # Ignore output of scraper
 data.sqlite
 
+run.sh
+
 # Logs
 logs
 *.log
