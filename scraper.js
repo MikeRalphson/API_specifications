@@ -177,16 +177,19 @@ function scrapeSpecs() {
 
 function fetchit(url, options) {
   return new Promise(function(resolve, reject){
-    options = Object.assign({ headers: {} }, options);
+    options = Object.assign({ headers: new fetch.Headers() }, options);
     console.log((options.method || 'GET') + ' ' +url);
     if (cookies) {
-      options.headers.cookie = cookies; 
+      for (let cookie of cookies.split(', ')) {
+        options.headers.set('cookie', cookie);
+      }
     }
     if (prevUrl) {
-      options.headers.referer = prevUrl;
+      options.headers.set('referer', prevUrl);
     }
     fetch(url, options)
     .then(function(res){
+      if (res.status !== 200) console.warn(res.status);
       prevUrl = url;
       if (res.headers.get('set-cookie')) {
         cookies = res.headers.get('set-cookie');
@@ -371,7 +374,10 @@ function codeSearchImpl(url) {
     })
     .then(gcHacks.recreateReturnObjectAndGcCollect(function (html) {
       return parseGitHubPage(html);
-    }));
+    }))
+    .catch(function(ex){
+      throw ex;
+    });
 }
 
 function parseGitHubPage(html) {
