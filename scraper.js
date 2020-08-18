@@ -16,12 +16,13 @@ var sortobject = require('deep-sort-object');
 const { URLSearchParams } = require('url');
 var fetch = require('node-fetch');
 fetch.Promise = Promise;
+const cookie = require('cookies.txt');
 
 var gcHacks = require('gc-hacks');
 
 var baseUrl = 'https://github.com';
-var cookies = '';
 var prevUrl = '';
+let cookies = {};
 
 //If you work with thousands of files on GitHub it high probability
 //that some of the files are deleted in the process, so it pretty
@@ -29,8 +30,9 @@ var prevUrl = '';
 //errors without interrupting the entire process and show at the end.
 var skippedErrors = [];
 
-login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD)
-  .then(scrapeSpecs)
+cookie.parse('./cookies.txt',function(cookieObj) {
+  cookies = cookieObj;
+  scrapeSpecs()
   .spread(function (specs, hashes) {
     specs = _.uniqBy(specs, function (spec) {
       return _(spec).pick(['user', 'repo', 'path']).values().join('/');
@@ -49,6 +51,7 @@ login(process.env.MORPH_GITHUB_USER, process.env.MORPH_GITHUB_PASSWORD)
         console.log(format + ': ' + numSpecs);
       });
   });
+});
 
 function updateDB(specs, hashes) {
   var db = new sqlite3.Database('data.sqlite');
@@ -150,11 +153,11 @@ function scrapeSpecs() {
       }
       catch (e) {
         try {
-          entry.spec = YAML.safeLoad(body);
+          entry.spec = YAML.safeLoad(body,{json:true});
           entry.dataFormat = 'YAML';
         }
         catch (e) {
-          throw Error('Cannot parse: ' + getSpecUrl(entry));
+          //throw Error('Cannot parse: ' + getSpecUrl(entry));
         }
       }
 
@@ -179,21 +182,31 @@ function fetchit(url, options) {
   return new Promise(function(resolve, reject){
     options = Object.assign({ headers: new fetch.Headers() }, options);
     console.log((options.method || 'GET') + ' ' +url);
-    if (cookies) {
-      for (let cookie of cookies.split(', ')) {
-        options.headers.set('cookie', cookie);
-      }
+    if (Object.keys(cookies).length) {
+      options.headers.set('cookie',cookie.getCookieString(url));
     }
     if (prevUrl) {
       options.headers.set('referer', prevUrl);
     }
+    options.headers.set('user-agent','Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:79.0) Gecko/20100101 Firefox/79.0');
+    options.headers.set('accept-language','en-GB,en;q=0.5');
+    options.headers.set('accept','text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8');
+    //options.headers.set('accept','application/vnd.github.v3.text-match+json');
+    options.headers.set('Accept-Encoding','gzip, deflate, br');
     fetch(url, options)
-    .then(function(res){
+    .then(async function(res){
       if (res.status !== 200) console.warn(res.status);
+      if (res.status === 429) {
+        const naughty = parseInt(res.headers.get('retry-after'),10);
+        if (naughty) {
+          console.warn('Waiting for',naughty);
+          await Promise.delay(naughty*1000);
+        }
+      }
       prevUrl = url;
       if (res.headers.get('set-cookie')) {
-        cookies = res.headers.get('set-cookie');
-        console.log('Cookies in jar:', cookies.split(', ').length);
+        const newCookies = res.headers.get('set-cookie');
+        //console.log('New cookies in jar:', newCookies.split(', ').length);
       }
       return res.text();
     })
@@ -212,6 +225,7 @@ function runQueries(queries, iter) {
   return Promise.each(queries, function (query) {
     return codeSearch(query, function (entries) {
       return Promise.map(entries, function (entry) {
+        fs.appendFileSync('./scraper.log',getSpecUrl(entry)+'\n','utf8');
         return fetchit(getSpecUrl(entry))
           .then(function (body) {
             entry.size = Buffer.byteLength(body);
@@ -306,8 +320,8 @@ function isIncomplete(data) {
 
 function runQueryImpl(query) {
   query = query.replace(/ /g, '+');
-  var url = baseUrl + '/search?q=' + query + '&type=Code';
-  return codeSearchImpl(url);
+  var url = baseUrl + '/search?q=' + query + '&fork=false&type=Code';
+  return codeSearchImpl(url, 1);
 }
 
 function iterateAllResults(data, iter) {
@@ -318,7 +332,7 @@ function iterateAllResults(data, iter) {
 
       if (!data.next)
         break;
-      data = yield codeSearchImpl(baseUrl + data.next);
+      data = yield codeSearchImpl(baseUrl + data.next, 1);
     }
   })();
 }
@@ -327,40 +341,8 @@ function dumpHtml(html) {
   fs.writeFileSync('./invalid.html',html,'utf8');
 }
 
-function login(login, password, callback) {
-  var loginUrl = baseUrl + '/login';
-  return fetchit(loginUrl)
-    .then(function (html) {
-      var $;
-      try {
-        $ = cheerio.load(html);
-      }
-      catch (ex) {
-        console.warn(ex.message);
-        dumpHtml(html);
-        $ = cheerio.load('');
-      }
-      var form = $('form').first();
-      var method = form.attr('method');
-      var url = URI(form.attr('action')).absoluteTo(loginUrl).href();
-      var formData = new URLSearchParams();
-
-      form.find('input').each(function () {
-	var name = $(this).attr('name');
-        var value = $(this).attr('value');
-	if (name && value)
-          formData.append(name, value);
-      });
-
-      formData.append('login_field', login);
-      formData.append('password', password);
-
-      return fetchit(url, {method: 'POST', body: formData});
-    });
-}
-
 var timeOfLastCall = Date.now()
-function codeSearchImpl(url) {
+function codeSearchImpl(url, counter) {
   //Github allow only 10 calls per minute without login
   //and 30 calls per minute after you login
   var delay = 2000 - (Date.now() - timeOfLastCall);
@@ -376,7 +358,7 @@ function codeSearchImpl(url) {
       return parseGitHubPage(html);
     }))
     .catch(function(ex){
-      throw ex;
+      if (counter < 10) codeSearchImpl(url,counter++);
     });
 }
 
@@ -388,7 +370,8 @@ function parseGitHubPage(html) {
       dumpHtml(html);
       throw Error('Github return error: ' + container.text().trim());
     }
-    throw Error('Invalid HTML');
+    //throw Error('Invalid HTML');
+    return {};
   }
 
   if ($('.blankslate').length > 0)
@@ -399,6 +382,9 @@ function parseGitHubPage(html) {
   list.entries = Array.from($('.code-list-item').map(function () {
     //var fileLink = $('.title a:nth-child(2)', this).attr('href');
     var fileLink = $('a:nth-child(2)', this).attr('href');
+    if (!fileLink) {
+      return undefined;
+    }
 
     var match = fileLink.match(/^\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)$/);
     if (!match)

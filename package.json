@@ -1,15 +1,15 @@
 {
   "private": true,
   "dependencies": {
-    "bluebird": "^3.3.4",
-    "cheerio": "^0.22.0",
+    "bluebird": "^3.7.2",
+    "cheerio": "^1.0.0-rc.3",
+    "cookies.txt": "^0.1.2",
     "deep-sort-object": "^1.0.1",
     "gc-hacks": "^1.0.3",
-    "har-replay": "0.0.10",
-    "js-yaml": "^3.5.2",
-    "lodash": "^4.1.0",
-    "node-fetch": "^2.3.0",
-    "sqlite3": "^4.0.6",
-    "urijs": "^1.17.0"
+    "js-yaml": "^3.14.0",
+    "lodash": "^4.17.20",
+    "node-fetch": "^2.6.0",
+    "sqlite3": "^4.2.0",
+    "urijs": "^1.19.2"
   }
 }

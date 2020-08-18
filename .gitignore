@@ -2,6 +2,9 @@
 data.sqlite
 invalid.html
 
+cookies.txt
+repos.txt
+
 # scripts
 run.sh
 
