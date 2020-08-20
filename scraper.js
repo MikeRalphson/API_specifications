@@ -315,7 +315,7 @@ function sizeFilter(begin, end) {
 
 function isIncomplete(data) {
   var searchLimit = 1000; //Github limit on results per query
-  return data.totalEntries > searchLimit || data.incomplete;
+  return data ? data.totalEntries > searchLimit || data.incomplete : true;
 }
 
 function runQueryImpl(query) {
@@ -358,7 +358,7 @@ function codeSearchImpl(url, counter) {
       return parseGitHubPage(html);
     }))
     .catch(function(ex){
-      if (counter < 10) codeSearchImpl(url,counter++);
+      if (counter < 10) return codeSearchImpl(url,counter++);
     });
 }
 
