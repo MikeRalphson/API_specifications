@@ -201,6 +201,7 @@ function fetchit(url, options) {
         if (naughty) {
           console.warn('Waiting for',naughty);
           await Promise.delay(naughty*1000);
+          return fetchit(url, options);
         }
       }
       prevUrl = url;
